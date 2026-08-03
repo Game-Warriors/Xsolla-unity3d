@@ -1,3 +1,9 @@
+## [3.1.18.1] - 2026-08-3
+
+### Changed
+
+- add is enable field to setting
+
 ## [3.1.18] - 2026-08-1
 
 ### Changed

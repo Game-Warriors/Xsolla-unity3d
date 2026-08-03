@@ -156,6 +156,8 @@ namespace Xsolla.SDK.Common
             public int redirectDelay = 6;
         }
 
+        public bool isEnable;
+
         /// <summary>Project ID for Xsolla.</summary>
         public int projectId = -1;
 

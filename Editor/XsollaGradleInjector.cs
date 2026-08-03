@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Android;
 using UnityEngine;
+using Xsolla.SDK.Common;
 
 namespace Xsolla.SDK
 {
@@ -24,10 +25,21 @@ namespace Xsolla.SDK
         private const string SCRIPT_PREFIX = "xsolla_";
         private const string GRADLE_SCRIPTS_FOLDER = "GradleScripts";
 
+        protected static XsollaClientSettingsAsset TryToLoad()
+        {
+            XsollaClientSettingsAsset xsollaClientSettingsAsset = Resources.Load("XsollaSDKSettings") as XsollaClientSettingsAsset;
+
+            return xsollaClientSettingsAsset;
+        }
+
         public void OnPostGenerateGradleAndroidProject(string path)
         {
             try
             {
+                var settingsAsset = TryToLoad();
+                if (settingsAsset == null || !settingsAsset.settings.isEnable)
+                    return;
+
                 path = path.Replace('\\', '/');
 
                 var projectName = Path.GetFileName(path);
