@@ -8,9 +8,9 @@
         "url": "https://xsolla.com/partner-support"
     },
     "unity": "2022.3",
-    "version": "3.1.19",
+    "version": "3.1.20",
     "dependencies": {
-        "com.unity.purchasing": "5.0.2",
+        "com.unity.purchasing": "5.4.2",
         "com.unity.nuget.newtonsoft-json": "2.0.0"
     },
     "license": "See LICENSE file",

@@ -1,3 +1,9 @@
+## [3.1.20] - 2026-08-3
+
+### Changed
+
+- update unity purchase to version 5.4 and fix code structure
+
 ## [3.1.19] - 2026-08-3
 
 ### Changed

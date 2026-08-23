@@ -24,6 +24,9 @@ namespace Xsolla.SDK.UnityPurchasing
         public List<IPurchasedProductInfo> PurchasedProductInfo { get; set; }
         public string TransactionID { get; }
         public string Receipt { get; }
+
+        public IPaymentProvidersOrderInfo PaymentProviders => null;
+
     }
 }
 #endif
