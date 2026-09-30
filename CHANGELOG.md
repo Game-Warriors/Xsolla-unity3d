@@ -1,3 +1,9 @@
+## [3.1.21] - 2026-09-30
+
+### Changed
+
+- make XsollaPurchasingStore public
+
 ## [3.1.20] - 2026-08-3
 
 ### Changed

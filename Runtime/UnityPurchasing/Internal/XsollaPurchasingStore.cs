@@ -14,7 +14,7 @@ namespace Xsolla.SDK.UnityPurchasing
     /// <summary>
     /// Unity IAP 5 store implementation backed by the Xsolla Store client.
     /// </summary>
-    internal sealed class XsollaPurchasingStore : UnityEngine.Purchasing.Extension.Store
+    public sealed class XsollaPurchasingStore : UnityEngine.Purchasing.Extension.Store
     {
         public const string Name = "XsollaStore";
 
@@ -31,15 +31,16 @@ namespace Xsolla.SDK.UnityPurchasing
 
         private XsollaPurchasingStoreValidator _validator;
 
-        internal ConnectionState ConnectionState { get; private set; } = ConnectionState.Disconnected;
+        public ConnectionState ConnectionState { get; private set; } = ConnectionState.Disconnected;
 
-        internal XsollaPurchasingStore(XsollaClientConfiguration configuration)
+        public XsollaPurchasingStore(XsollaClientConfiguration configuration)
         {
             RunOnStartThread.Create();
 
             _settingsFuture = SimpleFuture.Create<XsollaClientConfiguration, string>(out var promise);
             XsollaLogger.SetLogLevel(configuration.logLevel);
 
+            if (configuration.delayedTask != null)
             if (configuration.delayedTask != null)
                 AwaitForConfiguration(configuration, promise);
             else
@@ -155,7 +156,7 @@ namespace Xsolla.SDK.UnityPurchasing
             FetchPurchasesInternal(null);
         }
 
-        internal void RestoreTransactions(Action<bool, string> callback)
+        public void RestoreTransactions(Action<bool, string> callback)
         {
             FetchPurchasesInternal(callback);
         }
@@ -209,7 +210,7 @@ namespace Xsolla.SDK.UnityPurchasing
                 var cart = new Cart(product);
                 var info = new XsollaOrderInfo(purchase.ToReceipt().ToJson(), purchase.transactionId);
 
-                if (product.definition.type == ProductType.Consumable)
+                if (GetProductType(product) == ProductType.Consumable)
                     orders.Add(new PendingOrder(cart, info));
                 else
                     orders.Add(new ConfirmedOrder(cart, info));
@@ -236,7 +237,7 @@ namespace Xsolla.SDK.UnityPurchasing
             Purchase(items[0].Product, cart, null, XsollaStoreClientPurchaseArgs.Empty);
         }
 
-        internal void InitiatePurchase(Product product, XsollaStoreClientPurchaseArgs args)
+        public void InitiatePurchase(Product product, XsollaStoreClientPurchaseArgs args)
         {
             if (product == null)
                 return;
@@ -245,7 +246,7 @@ namespace Xsolla.SDK.UnityPurchasing
             Purchase(product, cart, null, args ?? XsollaStoreClientPurchaseArgs.Empty);
         }
 
-        internal void InitiatePurchase(string productId, XsollaStoreClientPurchaseArgs args)
+        public void InitiatePurchase(string productId, XsollaStoreClientPurchaseArgs args)
         {
             var product = FindProduct(productId);
             if (product == null)
@@ -342,7 +343,7 @@ namespace Xsolla.SDK.UnityPurchasing
             var sku = product.definition.storeSpecificId;
             var transactionId = pendingOrder.Info.TransactionID;
 
-            if (product.definition.type != ProductType.Consumable)
+            if (GetProductType(product) != ProductType.Consumable)
             {
                 _quantityByTransactionId.Remove(transactionId);
                 ConfirmCallback?.OnConfirmOrderSucceeded(transactionId);
@@ -434,19 +435,29 @@ namespace Xsolla.SDK.UnityPurchasing
             return false;
         }
 
-        private static Product FindProduct(string productId)
+        private Product FindProduct(string productId)
         {
-            try
-            {
-                return UnityIAPServices.Product(Name).GetProductById(productId);
-            }
-            catch (Exception)
-            {
+            if (string.IsNullOrEmpty(productId))
                 return null;
-            }
+
+            var product = ReadOnlyProductCache.Find(productId);
+            if (product != null)
+                return product;
+
+            // The cache is only filled by the Unity IAP services. When the store is driven directly,
+            // fall back to a placeholder product for the skus this store has fetched itself.
+            return _productById.ContainsKey(productId) ? ReadOnlyProductCache.FindOrDefault(productId) : null;
         }
 
-        internal bool TryGetProductIconUrl(Product product, out string url)
+        private ProductType GetProductType(Product product)
+        {
+            var definition = product.definition;
+            return definition.type == ProductType.Unknown && _definitionBySku.TryGetValue(definition.storeSpecificId, out var known)
+                ? known.type
+                : definition.type;
+        }
+
+        public bool TryGetProductIconUrl(Product product, out string url)
         {
             if (product != null && _productById.TryGetValue(product.definition.storeSpecificId, out var productData))
             {
@@ -458,7 +469,7 @@ namespace Xsolla.SDK.UnityPurchasing
             return false;
         }
 
-        internal bool TryGetProduct(Product product, out XsollaStoreClientProduct productData)
+        public bool TryGetProduct(Product product, out XsollaStoreClientProduct productData)
         {
             if (product != null)
                 return _productById.TryGetValue(product.definition.storeSpecificId, out productData);
@@ -467,19 +478,19 @@ namespace Xsolla.SDK.UnityPurchasing
             return false;
         }
 
-        internal XsollaPurchasingStoreValidator GetValidator()
+        public XsollaPurchasingStoreValidator GetValidator()
         {
             return _validator ?? (_validator = new XsollaPurchasingStoreValidator(_storeClient));
         }
 
-        internal void GetAccessToken(Action<string> onSuccess, Action<string> onError)
+        public void GetAccessToken(Action<string> onSuccess, Action<string> onError)
         {
             _storeClient.GetAccessToken(
                 token => onSuccess?.Invoke(token),
                 error => onError?.Invoke(error));
         }
 
-        internal void UpdateAccessToken(string token, Action onSuccess, Action<string> onError)
+        public void UpdateAccessToken(string token, Action onSuccess, Action<string> onError)
         {
             _storeClient.UpdateAccessToken(
                 token,
@@ -487,7 +498,7 @@ namespace Xsolla.SDK.UnityPurchasing
                 error => onError?.Invoke(error));
         }
 
-        internal void GetAppleStorefront(Action<string> onSuccess, Action<string> onError)
+        public void GetAppleStorefront(Action<string> onSuccess, Action<string> onError)
         {
             _storeClient.GetAppleStorefront(
                 storefront => onSuccess?.Invoke(storefront),
