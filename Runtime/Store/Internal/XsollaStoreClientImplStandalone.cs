@@ -2,6 +2,7 @@
 using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using UnityEngine;
 using Xsolla.Auth;
@@ -19,6 +20,8 @@ namespace Xsolla.SDK.Store
     internal class XsollaStoreClientImplStandalone : IXsollaStoreClient
     {
         private const string Tag = "XsollaStoreClientImplSDK";
+
+        private static readonly System.Random RetryJitterRandom = new System.Random();
 
         [Serializable, UsedImplicitly]
         private class ReceiptForJson
@@ -101,9 +104,11 @@ namespace Xsolla.SDK.Store
                                             onUnorderedPurchaseProduct?.Invoke(
                                                 XsollaStoreClientPurchasedProduct.Builder.Create()
                                                     .SetOrderId(evt.order_id)
+                                                    .SetInvoiceId(evt.transaction_id ?? string.Empty)
                                                     .SetTransactionId(evt.transaction_id ?? Guid.NewGuid().ToString())
                                                     .SetSku(evt.sku)
                                                     .SetQuantity(evt.quantity)
+                                                    .SetPurchaseTimeMillis(ToUnixMillis(evt.created_at))
                                                     .SetStatus(evt.order_status)
                                                     .SetReceipt(XsollaClientHelpers.ToJson(evt))
                                                     .SetDeveloperPayload(evt.custom_parameters.TryGetValue("custom_payload", out var parameter) ? parameter : string.Empty)
@@ -205,9 +210,11 @@ namespace Xsolla.SDK.Store
                     onSuccess?.Invoke(result.Map(evt =>
                         XsollaStoreClientPurchasedProduct.Builder.Create()
                             .SetOrderId(evt.order_id)
+                            .SetInvoiceId(evt.transaction_id ?? string.Empty)
                             .SetTransactionId(evt.transaction_id ?? Guid.NewGuid().ToString())
                             .SetSku(evt.sku)
                             .SetQuantity(evt.quantity)
+                            .SetPurchaseTimeMillis(ToUnixMillis(evt.created_at))
                             .SetStatus(evt.order_status)
                             .SetReceipt(XsollaClientHelpers.ToJson(evt))
                             .SetDeveloperPayload(evt.custom_parameters.TryGetValue("custom_payload", out var parameter) ? parameter : string.Empty)
@@ -300,17 +307,19 @@ namespace Xsolla.SDK.Store
 
             getPurchaseParams().currency = locale?.currencyCode;
 
-            if (!string.IsNullOrEmpty(configuration.userId))
-                AddCustomParam("custom_user_id", configuration.userId);
-
-            if (!string.IsNullOrEmpty(finalDeveloperPayload))
-                AddCustomParam("custom_payload", finalDeveloperPayload);
+            getPurchaseParams().custom_parameters = MakeCustomParameters(configuration, finalDeveloperPayload);
 
             if (!string.IsNullOrEmpty(args.externalId))
                 getPurchaseParams().external_id = args.externalId;
 
             if (args?.paymentMethodId != null && args.paymentMethodId >= 0)
                 getPurchaseParams().payment_method = args.paymentMethodId;
+
+            if (!string.IsNullOrEmpty(args?.externalTransactionToken))
+            {
+                onError?.Invoke($"External transaction token is not supported on this platform ({Application.platform})");
+                return;
+            }
 
             if (!string.IsNullOrEmpty(configuration.trackingId))
                 getPurchaseParams().tracking_id = configuration.trackingId;
@@ -365,12 +374,6 @@ namespace Xsolla.SDK.Store
                     onBrowseClosed: null,
                     purchaseParams: purchaseParams
                 );
-            }
-
-            void AddCustomParam(string key, string value)
-            {
-                getPurchaseParams().custom_parameters ??= new Dictionary<string, object>();
-                getPurchaseParams().custom_parameters.Add(key, value);
             }
 
             void OnSuccess(OrderStatus orderStatus)
@@ -793,6 +796,40 @@ namespace Xsolla.SDK.Store
             return future;
         }
 
+        /// <summary>
+        /// Builds the <c>custom_parameters</c> of the create-order request, leaving out each key whose value
+        /// is unset or empty.
+        /// </summary>
+        /// <returns>The parameters in the order they go on the wire, or <c>null</c> when none is set so the
+        /// field stays off the request.</returns>
+        internal static Dictionary<string, object> MakeCustomParameters(XsollaClientConfiguration configuration, string developerPayload)
+        {
+            var customParameters = new Dictionary<string, object>();
+
+            if (!string.IsNullOrEmpty(configuration.userId))
+                customParameters.Add("custom_user_id", configuration.userId);
+
+            if (!string.IsNullOrEmpty(configuration.attributionUserId))
+                customParameters.Add("custom_id", configuration.attributionUserId);
+
+            if (!string.IsNullOrEmpty(developerPayload))
+                customParameters.Add("custom_payload", developerPayload);
+
+            return customParameters.Count > 0 ? customParameters : null;
+        }
+
+        // Events carry the payment time as an ISO 8601 string. Anything unparseable reports no time at all
+        // rather than a guess, which is what a zero means downstream.
+        private static long ToUnixMillis(string timestamp)
+        {
+            return DateTimeOffset.TryParse(timestamp,
+                                           CultureInfo.InvariantCulture,
+                                           DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                                           out var parsed)
+                ? parsed.ToUnixTimeMilliseconds()
+                : 0;
+        }
+
         // The store assembly can see the (internal) retry-policy types in the common assembly, so it
         // resolves the configured QueryProducts profile here and hands the catalog a plain schedule.
         private static RetryProfile ResolveQueryProductsProfile()
@@ -817,7 +854,7 @@ namespace Xsolla.SDK.Store
                             delayMillis = Math.Min(delayMillis, backoff.maxIntervalMillis.Value);
 
                         var jitter = backoff.maxRandomExtraDelayMillis.HasValue
-                            ? UnityEngine.Random.Range(0, (int)backoff.maxRandomExtraDelayMillis.Value)
+                            ? RetryJitterRandom.Next(0, (int)backoff.maxRandomExtraDelayMillis.Value)
                             : 0;
 
                         return (delayMillis + jitter) / 1000f;

@@ -70,11 +70,13 @@ namespace Xsolla.SDK.Store
         
         public static string PurchaseToJson(
             string sku, string developerPayload, string externalId,
-            [CanBeNull] string paymentToken = null, int? paymentMethodId = null, bool allowTokenOnlyFinishedStatusWithoutOrderId = false
+            [CanBeNull] string paymentToken = null, int? paymentMethodId = null, bool allowTokenOnlyFinishedStatusWithoutOrderId = false,
+            [CanBeNull] string externalTransactionToken = null
         )
         {
             var data = new XsollaStoreClientPaymentData(
-                sku, developerPayload, externalId, paymentToken, paymentMethodId, allowTokenOnlyFinishedStatusWithoutOrderId
+                sku, developerPayload, externalId, paymentToken, paymentMethodId, allowTokenOnlyFinishedStatusWithoutOrderId,
+                externalTransactionToken
             );
             return XsollaClientHelpers.ToJson(data);
         }
@@ -94,12 +96,18 @@ namespace Xsolla.SDK.Store
             return result != null;
         }
 
+        /// <summary>
+        /// Parses an error string from a platform implementation. Named for purchases, where it
+        /// started, but the shape is the same for every native error — a catalog fetch that failed
+        /// sends it too — and anything that isn't this JSON is kept as the message verbatim.
+        /// </summary>
         public static XsollaStoreClientError ParsePurchaseError(string error)
         {
             if (string.IsNullOrEmpty(error))
                 return new XsollaStoreClientError("Unknown error!", XsollaStoreClientPurchaseErrorCode.Unknown);
 
-            // Try JSON shape: { message: "...", code: "Cancelled" | 4 }
+            // Try JSON shape: { message: "...", code: "Cancelled" | 4, statusCode: 422, errorCode: 1006 }
+            // statusCode/errorCode are there only when an Xsolla API response is what failed.
             try
             {
                 var token = JToken.Parse(string.IsNullOrWhiteSpace(error) ? "{}" : error);
@@ -131,12 +139,23 @@ namespace Xsolla.SDK.Store
                     }
 
                     if (!string.IsNullOrEmpty(message))
-                        return new XsollaStoreClientError(message, code);
+                        return new XsollaStoreClientError(message, code)
+                        {
+                            statusCode = ReadInt(obj["statusCode"]),
+                            errorCode = ReadInt(obj["errorCode"]),
+                            errorMessage = ReadString(obj["errorMessage"]),
+                        };
                 }
             }
             catch { /* not a JSON, fall back to message */ }
             
             return new XsollaStoreClientError(error, XsollaStoreClientPurchaseErrorCode.Unknown);
         }
+
+        /// <summary>Reads an optional integer field, as zero when it is absent or isn't a number.</summary>
+        private static int ReadInt(JToken token) => token?.Type == JTokenType.Integer ? (int)token : 0;
+
+        /// <summary>Reads an optional string field, as null when it is absent or isn't a string.</summary>
+        private static string ReadString(JToken token) => token?.Type == JTokenType.String ? (string)token : null;
     }
 }

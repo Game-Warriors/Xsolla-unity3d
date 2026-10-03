@@ -59,8 +59,8 @@ namespace Xsolla.Catalog
 	        ProductFetchRetryPolicy retryPolicy = null
 	    )
 		{
-			maxSkusPerRequest = Mathf.Clamp(maxSkusPerRequest, 1, 50);
-			maxParallelRequests = Mathf.Max(1, maxParallelRequests);
+			maxSkusPerRequest = Math.Clamp(maxSkusPerRequest, 1, 50);
+			maxParallelRequests = Math.Max(1, maxParallelRequests);
 			retryPolicy ??= ProductFetchRetryPolicy.Default;
 
 			CultureInfo geoLocale = null;
@@ -374,7 +374,7 @@ namespace Xsolla.Catalog
 
 		private static IEnumerator RetryAfter(float seconds, Action action)
 		{
-			yield return new WaitForSeconds(seconds);
+			yield return new WaitForSecondsRealtime(seconds);
 			action();
 		}
 

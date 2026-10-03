@@ -75,15 +75,17 @@ namespace Xsolla.Core
 
 				_isGetOrderIdInProgress = true;
 
-				OrderStatusService.GetOrderId(
+				OrderStatusService.GetOrderInfo(
 					TrackingData.settings,
-					TrackingData.token,
-					(orderId) =>
+					accessToken: TrackingData.token,
+					TrackingData.sdkType,
+					onSuccess: orderInfo =>
 					{
 						_isGetOrderIdInProgress = false;
-						TrackingData.OrderId = orderId;
+						if (orderInfo.TryAsDone(out var done))
+							TrackingData.OrderId = done.orderId;
 					},
-					error =>
+					onFailure: error =>
 					{
 						_isGetOrderIdInProgress = false;
 						if (error.ErrorType == ErrorType.OrderInfoDoneButInvalidOrderId ||
@@ -92,9 +94,7 @@ namespace Xsolla.Core
 							TrackingData.OrderId = 0;
 							TrackingData.Error = error;
 						}
-						
-					},
-					TrackingData.sdkType
+					}
 				);
 
 				return false;

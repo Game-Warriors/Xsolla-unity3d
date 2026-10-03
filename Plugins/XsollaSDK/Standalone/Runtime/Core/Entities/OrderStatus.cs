@@ -6,7 +6,7 @@ namespace Xsolla.Core
 	[Serializable]
 	internal class OrderStatus
 	{
-		public int order_id;
+		public long order_id;
 		public string status;
 		public OrderContent content;
 		

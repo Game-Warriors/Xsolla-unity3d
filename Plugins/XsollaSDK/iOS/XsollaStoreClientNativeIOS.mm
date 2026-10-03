@@ -20,6 +20,54 @@ static NSString* const kXsollaPurchaseErrorCodeUnknown = @"Unknown";
 static NSString* const kXsollaPurchaseErrorCodeCancelled = @"Cancelled";
 static NSString* const kXsollaPurchaseErrorCodeAborted = @"Aborted";
 static NSString* const kXsollaPurchaseErrorCodeInternal = @"Internal";
+static NSString* const kXsollaPurchaseErrorCodeUnauthorized = @"Unauthorized";
+
+// Keys the iOS SDK attaches to a failed transaction's error when the failure came from an Xsolla
+// API response, carrying what the backend actually said. Declared in SKXErrorUserInfoKeys on the
+// SDK side; spelled out here as literals so this bridge keeps compiling — and keeps its previous
+// behavior — against an SDK version that predates them.
+static NSString* const kXsollaErrorHttpStatusCodeKey = @"com.xsolla.error.httpStatusCode";
+static NSString* const kXsollaErrorBackendErrorCodeKey = @"com.xsolla.error.backendErrorCode";
+static NSString* const kXsollaErrorBackendErrorMessageKey = @"com.xsolla.error.backendErrorMessage";
+
+// Log level names, matching the C# XsollaLogLevel members, as the error codes above do.
+static NSString* const kXsollaLogLevelWarning = @"Warning";
+static NSString* const kXsollaLogLevelError = @"Error";
+
+// Receives log lines on the C# side. Warnings and errors only — see XsollaForwardLogToUnity.
+typedef void (*XsollaUnityBridgeLogCallbackDelegate)(const char *level, const char *message);
+static XsollaUnityBridgeLogCallbackDelegate gXsollaLogCallback = NULL;
+
+// Sends a log line to C#, where it becomes a Unity warning or error.
+//
+// Deliberately only warnings and errors: a Unity developer needs to know what went wrong without
+// attaching Xcode, not to have the SDK's whole trace pushed across the bridge and into their player
+// log. Everything below warning stays in the device log, where iOS developers read it.
+//
+// Hops to the main queue because a line can be logged on any thread, and the callback ends up in
+// managed code, which has to be entered on Unity's thread. A single queue keeps lines in order.
+static void XsollaForwardLogToUnity(SKLogLevel level, NSString *message) {
+    if (gXsollaLogCallback == NULL || level < SKLogLevelWarning || message == nil) {
+        return;
+    }
+
+    NSString *levelName = level >= SKLogLevelError ? kXsollaLogLevelError : kXsollaLogLevelWarning;
+    NSString *line = [message copy];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        XsollaUnityBridgeLogCallbackDelegate callback = gXsollaLogCallback;
+        if (callback != NULL) {
+            callback([levelName UTF8String], [line UTF8String]);
+        }
+    });
+}
+
+// Asks the iOS SDK to send its own log lines here as well, so an SDK warning or error reaches Unity
+// instead of only the device log. Needs an iOS package that has SKXLogging.
+static void XsollaInstallSdkLogHandler(void) {
+    [SKXLogging setHandler:^(SKLogLevel level, NSString* message) {
+        XsollaForwardLogToUnity(level, message);
+    }];
+}
 
 // Minimal logging wrapper to respect configured log level.
 static SKLogLevel gXsollaLogLevel = SKLogLevelWarning;
@@ -29,6 +77,7 @@ static void XsollaUnityLogv(SKLogLevel currentLevel, SKLogLevel level, NSString 
     }
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     NSLog(@"%@", message);
+    XsollaForwardLogToUnity(level, message);
 }
 
 static void XsollaUnityLogWithOverride(SKLogLevel currentLevel, SKLogLevel level, NSString *format, ...) {
@@ -165,22 +214,80 @@ static XsollaUnityMobile *sharedMyManager = nil;
 }
 
 - (NSString*) errorJsonWithMessage:(NSString*)message code:(NSString*)code {
+    return [self errorJsonWithMessage:message code:code error:nil];
+}
+
+// `error` is optional: when it carries the detail of a failed Xsolla API response, the JSON gains
+// `statusCode`, `errorCode` and `errorMessage` — what the backend itself said about the purchase it
+// refused, instead of a single coarse `code` and a description written for a log.
+- (NSString*) errorJsonWithMessage:(NSString*)message code:(NSString*)code error:(NSError*)error {
+    NSMutableDictionary* dict = [@{ @"message": message ?: @"", @"code": code ?: kXsollaPurchaseErrorCodeUnknown } mutableCopy];
+
+    NSNumber* httpStatusCode = [self numberFromError:error forKey:kXsollaErrorHttpStatusCodeKey];
+    if (httpStatusCode != nil) {
+        dict[@"statusCode"] = httpStatusCode;
+    }
+
+    NSNumber* backendErrorCode = [self numberFromError:error forKey:kXsollaErrorBackendErrorCodeKey];
+    if (backendErrorCode != nil) {
+        dict[@"errorCode"] = backendErrorCode;
+    }
+
+    NSString* backendErrorMessage = [self stringFromError:error forKey:kXsollaErrorBackendErrorMessageKey];
+    if (backendErrorMessage != nil) {
+        dict[@"errorMessage"] = backendErrorMessage;
+    }
+
     NSError *err;
-    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:@{ @"message": message ?: @"", @"code": code ?: kXsollaPurchaseErrorCodeUnknown } options:0 error:&err];
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:dict options:0 error:&err];
     if (jsonData != nil) {
         return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
     }
     return [NSString stringWithFormat:@"{ \"message\": \"%@\", \"code\": \"%@\" }", message ?: @"", code ?: kXsollaPurchaseErrorCodeUnknown];
 }
 
+- (NSNumber* _Nullable) numberFromError:(NSError*)error forKey:(NSString*)key {
+    if (!error) return nil;
+    id value = error.userInfo[key];
+    return [value isKindOfClass:[NSNumber class]] ? (NSNumber*)value : nil;
+}
+
+- (NSString* _Nullable) stringFromError:(NSError*)error forKey:(NSString*)key {
+    if (!error) return nil;
+    id value = error.userInfo[key];
+    return [value isKindOfClass:[NSString class]] ? (NSString*)value : nil;
+}
+
 - (NSString*) mapNSErrorToCode:(NSError*)error {
     if (!error) return kXsollaPurchaseErrorCodeUnknown;
+
+    // How the payment ended beats what any request did along the way: a cancelled purchase reports
+    // as cancelled even when a status request behind it failed with an HTTP error.
+    switch (error.code) {
+        case SKErrorPaymentCancelled:
+            return kXsollaPurchaseErrorCodeCancelled;
+        case SKErrorAborted:
+            return kXsollaPurchaseErrorCodeAborted;
+        default:
+            break;
+    }
+
+    // A failed Xsolla API response is an error we know something about, so report it as such
+    // rather than as Unknown. The response body's own code travels separately, in `errorCode`.
+    NSNumber* httpStatusCode = [self numberFromError:error forKey:kXsollaErrorHttpStatusCodeKey];
+    if (httpStatusCode != nil) {
+        NSInteger status = httpStatusCode.integerValue;
+        if (status == 401 || status == 403) {
+            return kXsollaPurchaseErrorCodeUnauthorized;
+        }
+        return kXsollaPurchaseErrorCodeInternal;
+    }
+
     switch (error.code) {
         case SKErrorUnknown:
             return kXsollaPurchaseErrorCodeUnknown;
-        case SKErrorPaymentCancelled:
-            return kXsollaPurchaseErrorCodeCancelled;
         case SKErrorClientInvalid:
+            return kXsollaPurchaseErrorCodeUnauthorized;
         case SKErrorPaymentInvalid:
 //        case SKErrorPaymentNotAllowed:
 //        case SKErrorStoreProductNotAvailable:
@@ -194,8 +301,6 @@ static XsollaUnityMobile *sharedMyManager = nil;
 //        case SKErrorMissingOfferParams:
 //        case SKErrorInvalidOfferPrice:
             return kXsollaPurchaseErrorCodeInternal;
-        case SKErrorAborted:
-            return kXsollaPurchaseErrorCodeAborted;
         default:
             return kXsollaPurchaseErrorCodeUnknown;
     }
@@ -222,7 +327,17 @@ NSString* paymentToJson(SKPaymentTransaction* transaction) {
     dict[@"transactionId"] = transaction.transactionIdentifier ? transaction.transactionIdentifier : @"";
     dict[@"orderId"] = transaction.transactionIdentifier ? transaction.transactionIdentifier : @"";
     dict[@"invoiceId"] = transaction.invoiceIdentifier ? transaction.invoiceIdentifier : @"";
-    
+    dict[@"quantity"] = @(transaction.payment.quantity);
+
+    // When the player paid. A restore carries that on the original transaction, but only the events
+    // path knows it: an inventory restore has no order behind it, so the original has no date and we
+    // fall back to the restore's own date, which is when it reached the queue.
+    NSDate* purchaseDate = transaction.originalTransaction.transactionDate ?: transaction.transactionDate;
+    if (purchaseDate) {
+        dict[@"purchaseTimeMillis"] = @((long long)(purchaseDate.timeIntervalSince1970 * 1000.0));
+    }
+
+
      if (receipt) {
          NSString* receiptString = [receipt base64EncodedStringWithOptions:0];
          dict[@"receipt"] = receiptString ?: @"";
@@ -367,7 +482,7 @@ NSString* productToJson(NSArray<SKXProduct *>* products) {
 
                 NSString* msg = t.error ? [t.error description] : @"Failed to buy";
                 NSString* code = [self mapNSErrorToCode:t.error];
-                NSString* json = [self errorJsonWithMessage:msg code:code];
+                NSString* json = [self errorJsonWithMessage:msg code:code error:t.error];
                 callback(nil, json);
                 // Finish failed transactions here — Unity side only receives the error string and has no transaction info to call consume/finish itself
                 [[SKPaymentQueue defaultQueue] finishTransaction:t];
@@ -518,7 +633,11 @@ static void _SendPaystationCompletedEvent(XsollaUnityMobile* instance) {
         return;
     }
     
-    callback(nil, error ? error.description : @"Failed to request products");
+    // Same JSON shape a failed purchase sends, so a catalog failure carries a code and the
+    // backend's own status/error code too, instead of an NSError dump C# can only treat as text.
+    NSString* msg = error ? [error description] : @"Failed to request products";
+    NSString* code = [self mapNSErrorToCode:error];
+    callback(nil, [self errorJsonWithMessage:msg code:code error:error]);
 }
 
 @end
@@ -903,6 +1022,10 @@ static SKPaymentSettings* _JsonToPaymentSettingsWithLogLevel(const char* jsonCSt
         settings.webshopUserId = json[@"userId"];
     }
 
+    if (json[@"attributionUserId"] && [json[@"attributionUserId"] length] > 0) {
+        settings.attributionUserId = json[@"attributionUserId"];
+    }
+
     if (json[@"trackingId"] && [json[@"trackingId"] length] > 0) {
         settings.trackingId = json[@"trackingId"];
     }
@@ -930,6 +1053,7 @@ static SKPaymentSettings* _JsonToPaymentSettingsWithLogLevel(const char* jsonCSt
                               @"simpleMode",
                               @"locale",
                               @"userId",
+                              @"attributionUserId",
                               @"trackingId",
                               @"sdkName",
                               @"sdkVersion",
@@ -1289,6 +1413,15 @@ extern "C"
 
         [[XMLoginManager shared] clearWidgetAuthTokenWithSettings:settings];
         callback(callbackData, "{}", NULL);
+    }
+
+    // Installed by C# before initialize, so the SDK's warnings and errors reach the Unity log.
+    void _XsollaUnityBridgeSetLogCallback(XsollaUnityBridgeLogCallbackDelegate callback) {
+        gXsollaLogCallback = callback;
+
+        if (callback != NULL) {
+            XsollaInstallSdkLogHandler();
+        }
     }
 
     void _XsollaUnityBridgeSetupAnalytics(const char* versionCStr) {

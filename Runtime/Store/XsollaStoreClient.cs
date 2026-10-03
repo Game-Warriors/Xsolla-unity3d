@@ -129,7 +129,7 @@ namespace Xsolla.SDK.Store
                             );
 #endif
                         },
-                        onError: error => completionHandler?.Invoke(null, XsollaStoreClientError.Message(error))
+                        onError: error => completionHandler?.Invoke(null, XsollaStoreClientHelpers.ParsePurchaseError(error))
                     );
                 },
                 onError: error => completionHandler?.Invoke(null, XsollaStoreClientHelpers.ParsePurchaseError(error)),
@@ -169,7 +169,7 @@ namespace Xsolla.SDK.Store
                     _products.AddRange(newProducts);
                     completionHandler?.Invoke(items, null);
                 },
-                onError: error => completionHandler?.Invoke(null, XsollaStoreClientError.Message(error))
+                onError: error => completionHandler?.Invoke(null, XsollaStoreClientHelpers.ParsePurchaseError(error))
             );
         }
 

@@ -5,6 +5,6 @@ namespace Xsolla.Core
 	[Serializable]
 	internal class OrderId
 	{
-		public int order_id;
+		public long order_id;
 	}
 }

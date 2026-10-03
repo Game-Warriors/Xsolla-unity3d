@@ -231,6 +231,10 @@ namespace Xsolla.SDK.Store
         public string status;
         /// <summary>Receipt string.</summary>
         public string receipt;
+        /// <summary>Number of units this purchase covers. Zero when the platform reports none.</summary>
+        public int quantity;
+        /// <summary>When the player paid, in Unix milliseconds. Zero when the platform reports none.</summary>
+        public long purchaseTimeMillis;
     }
 
     /// <summary>
@@ -262,8 +266,8 @@ namespace Xsolla.SDK.Store
 
         /// <summary>Product SKU.</summary>
         public string sku;
-        /// <summary>Order ID.</summary>
-        public int orderId;
+        /// <summary>Order ID. A 64-bit value: Xsolla order ids are stored as bigint and are past a third of the 32-bit range.</summary>
+        public long orderId;
         /// <summary>Invoice ID.</summary>
         public string invoiceId;
         /// <summary>Transaction ID.</summary>
@@ -272,6 +276,12 @@ namespace Xsolla.SDK.Store
         public string receipt;
         /// <summary>Quantity purchased.</summary>
         public int quantity;
+        /// <summary>
+        /// When the player paid, in Unix milliseconds, or zero when the platform reports no time. A restored
+        /// purchase reports the original payment where the backend records one; it is never the time the
+        /// purchase was read back.
+        /// </summary>
+        public long purchaseTimeMillis;
         /// <summary>Status of the purchase.</summary>
         public Status status;
         /// <summary>Developer payload.</summary>
@@ -299,7 +309,7 @@ namespace Xsolla.SDK.Store
             /// Sets the order ID.
             /// </summary>
             /// <param name="orderId">Order ID.</param>
-            public Builder SetOrderId(int orderId) { _product.orderId = orderId; return this; }
+            public Builder SetOrderId(long orderId) { _product.orderId = orderId; return this; }
 
             /// <summary>
             /// Sets the invoice ID.
@@ -312,6 +322,12 @@ namespace Xsolla.SDK.Store
             /// </summary>
             /// <param name="quantity">Quantity purchased.</param>
             public Builder SetQuantity(int quantity) { _product.quantity = quantity; return this; }
+
+            /// <summary>
+            /// Sets when the player paid, in Unix milliseconds.
+            /// </summary>
+            /// <param name="purchaseTimeMillis">Payment time in Unix milliseconds, or zero if unknown.</param>
+            public Builder SetPurchaseTimeMillis(long purchaseTimeMillis) { _product.purchaseTimeMillis = purchaseTimeMillis; return this; }
 
             /// <summary>
             /// Sets the status.
@@ -363,11 +379,15 @@ namespace Xsolla.SDK.Store
             public Builder FromData(XsollaStoreClientPurchasedProductData data)
             {
                 _product.sku = data.sku;
-                _product.orderId = string.IsNullOrEmpty(data.orderId) ? 0 : int.Parse(data.orderId);
+                // A malformed id reads as no id rather than throwing out of the native callback.
+                _product.orderId = long.TryParse(data.orderId, out var orderId) ? orderId : 0;
                 _product.invoiceId = data.invoiceId;
+                // Generated when the platform reports none, and never left empty: Unity IAP tracks the
+                // pending transaction by this id and matches FinishTransaction against it.
                 _product.transactionId = string.IsNullOrEmpty(data.transactionId) ? Guid.NewGuid().ToString() : data.transactionId;
                 _product.receipt = string.IsNullOrEmpty(data.receipt) ? "" : data.receipt;
-                _product.quantity = 1;
+                _product.quantity = data.quantity > 0 ? data.quantity : 1;
+                _product.purchaseTimeMillis = data.purchaseTimeMillis > 0 ? data.purchaseTimeMillis : 0;
                 SetStatus(data.status);
                 return this;
             }
@@ -392,6 +412,8 @@ namespace Xsolla.SDK.Store
                 .SetReceipt(receipt)
                 .SetOrderStatus(status)
                 .SetDeveloperPayload(developerPayload)
+                .SetQuantity(quantity)
+                .SetPurchaseTimeMillis(purchaseTimeMillis)
                 .Build();
         }
     }
@@ -411,6 +433,25 @@ namespace Xsolla.SDK.Store
         /// Error message description.
         /// </summary>
         public string message;
+
+        /// <summary>
+        /// HTTP status of the Xsolla API response that refused the purchase, or zero when the
+        /// failure didn't come from one — a cancellation, or no connection at all.
+        /// </summary>
+        public int statusCode;
+
+        /// <summary>
+        /// Xsolla's own error code from that response, which identifies the failure far more
+        /// narrowly than <see cref="code"/> does, or zero when the response carried none.
+        /// </summary>
+        public int errorCode;
+
+        /// <summary>
+        /// The error message from that response, as the backend worded it, or null when there was
+        /// none. <see cref="message"/> describes the whole failure and is meant for a log;
+        /// this is just what Xsolla said.
+        /// </summary>
+        public string errorMessage;
 
         /// <summary>
         /// Initializes a new instance with error message.
@@ -445,7 +486,13 @@ namespace Xsolla.SDK.Store
 
         public override string ToString()
         {
-            return $"({code}) - {message}";
+            var detail = "";
+            if (statusCode != 0)
+                detail += $" HTTP {statusCode}";
+            if (errorCode != 0)
+                detail += $" code {errorCode}";
+
+            return detail.Length > 0 ? $"({code}){detail} - {message}" : $"({code}) - {message}";
         }
     }
 
@@ -476,8 +523,8 @@ namespace Xsolla.SDK.Store
     {
         /// <summary>Product ID.</summary>
         public string productId;
-        /// <summary>Order ID.</summary>
-        public int orderId;
+        /// <summary>Order ID. A 64-bit value: Xsolla order ids are stored as bigint and are past a third of the 32-bit range.</summary>
+        public long orderId;
         /// <summary>Invoice ID.</summary>
         public string invoiceId;
         /// <summary>Transaction ID.</summary>
@@ -486,6 +533,10 @@ namespace Xsolla.SDK.Store
         public string receipt;
         /// <summary>Developer payload.</summary>
         public string developerPayload;
+        /// <summary>Number of units this purchase covers.</summary>
+        public int quantity;
+        /// <summary>When the player paid, in Unix milliseconds, or zero when no time is reported.</summary>
+        public long purchaseTimeMillis;
 
         /// <summary>Order status.</summary>
         [JsonConverter(typeof(StringEnumConverter))]
@@ -513,7 +564,7 @@ namespace Xsolla.SDK.Store
             /// Sets the order ID.
             /// </summary>
             /// <param name="orderId">Order ID.</param>
-            public Builder SetOrderId(int orderId) { _purchaseReceipt.orderId = orderId; return this; }
+            public Builder SetOrderId(long orderId) { _purchaseReceipt.orderId = orderId; return this; }
 
             /// <summary>
             /// Sets the invoice ID.
@@ -538,6 +589,18 @@ namespace Xsolla.SDK.Store
             /// </summary>
             /// <param name="orderStatus">Order status.</param>
             public Builder SetOrderStatus(XsollaStoreClientPurchasedProduct.Status orderStatus) { _purchaseReceipt.orderStatus = orderStatus; return this; }
+
+            /// <summary>
+            /// Sets the number of units the purchase covers.
+            /// </summary>
+            /// <param name="quantity">Quantity purchased.</param>
+            public Builder SetQuantity(int quantity) { _purchaseReceipt.quantity = quantity; return this; }
+
+            /// <summary>
+            /// Sets when the player paid, in Unix milliseconds.
+            /// </summary>
+            /// <param name="purchaseTimeMillis">Payment time in Unix milliseconds, or zero if unknown.</param>
+            public Builder SetPurchaseTimeMillis(long purchaseTimeMillis) { _purchaseReceipt.purchaseTimeMillis = purchaseTimeMillis; return this; }
 
             /// <summary>
             /// Sets the developer payload.
@@ -626,6 +689,9 @@ namespace Xsolla.SDK.Store
         /// <summary>Payment method ID (optional).</summary>
         public int? paymentMethodId;
 
+        /// <summary>External transaction token (optional).</summary>
+        [CanBeNull] public string externalTransactionToken;
+
         /// <summary>
         /// Initializes a new instance of <see cref="XsollaStoreClientPaymentData"/>.
         /// </summary>
@@ -634,10 +700,12 @@ namespace Xsolla.SDK.Store
         /// <param name="externalId">External ID.</param>
         /// <param name="paymentToken">Payment token (optional).</param>
         /// <param name="paymentMethodId">Payment method ID (optional).</param>
+        /// <param name="externalTransactionToken">External transaction token (optional).</param>
         public XsollaStoreClientPaymentData(
             string sku, string developerPayload, string externalId,
-            [CanBeNull] string paymentToken = null, int? paymentMethodId = null, 
-            bool allowTokenOnlyFinishedStatusWithoutOrderId = false
+            [CanBeNull] string paymentToken = null, int? paymentMethodId = null,
+            bool allowTokenOnlyFinishedStatusWithoutOrderId = false,
+            [CanBeNull] string externalTransactionToken = null
         )
         {
             this.sku = sku;
@@ -646,6 +714,7 @@ namespace Xsolla.SDK.Store
             this.paymentToken = paymentToken;
             this.paymentMethodId = paymentMethodId;
             this.allowTokenOnlyFinishedStatusWithoutOrderId = allowTokenOnlyFinishedStatusWithoutOrderId;
+            this.externalTransactionToken = externalTransactionToken;
         }
     }
 
@@ -768,6 +837,14 @@ namespace Xsolla.SDK.Store
         public int? paymentMethodId = null;
 
         /// <summary>
+        /// External transaction token (optional). Binds the order to a transaction created outside
+        /// of the SDK.
+        /// <para/><b>Only supported on Android.</b> Supplying it on Windows, Mac, Linux, WebGL, or
+        /// iOS fails the purchase with an error instead of being silently dropped.
+        /// </summary>
+        [CanBeNull] public string externalTransactionToken = null;
+
+        /// <summary>
         /// Gets an empty purchase arguments instance.
         /// </summary>
         public static XsollaStoreClientPurchaseArgs Empty => Builder.Create().Build();
@@ -785,7 +862,8 @@ namespace Xsolla.SDK.Store
             public Builder SetPaymentToken(string paymentToken)  { _args.paymentToken = paymentToken; return this; }
             public Builder SetDeveloperPayload([CanBeNull] string developerPayload)  { _args.developerPayload = developerPayload; return this; }
             public Builder SetPaymentMethodId(int? paymentMethodId)  { _args.paymentMethodId = paymentMethodId; return this; }
-            
+            public Builder SetExternalTransactionToken([CanBeNull] string externalTransactionToken)  { _args.externalTransactionToken = externalTransactionToken; return this; }
+
             [Obsolete("Deprecated since v3.1.1. Will be removed in a future major version.")]
             public Builder SetAllowTokenOnlyFinishedStatusWithoutOrderId(bool allowTokenOnlyFinishedStatusWithoutOrderId)  { _args.allowTokenOnlyFinishedStatusWithoutOrderId = allowTokenOnlyFinishedStatusWithoutOrderId; return this; }
 

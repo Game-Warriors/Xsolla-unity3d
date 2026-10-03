@@ -144,7 +144,7 @@ namespace Xsolla.GetUpdates
         public int id;
         public string created_at;
         
-        public int order_id;
+        public long order_id;
         public string order_status;
         public string transaction_id;
         public string sku;

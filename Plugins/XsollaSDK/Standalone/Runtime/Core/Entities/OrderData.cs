@@ -6,6 +6,6 @@ namespace Xsolla.Core
 	internal class OrderData
 	{
 		public string token;
-		public int order_id;
+		public long order_id;
 	}
 }

@@ -7,7 +7,7 @@ namespace Xsolla.Core
 {
 	internal static class OrderTrackingService
 	{
-		private static readonly Dictionary<int, OrderTracker> Trackers = new Dictionary<int, OrderTracker>();
+		private static readonly Dictionary<long, OrderTracker> Trackers = new Dictionary<long, OrderTracker>();
 		private static readonly Dictionary<string, OrderTracker> TrackersBySku = new Dictionary<string, OrderTracker>();
 		private static readonly Dictionary<string, OrderTracker> TrackersByToken = new Dictionary<string, OrderTracker>();
 
@@ -24,7 +24,7 @@ namespace Xsolla.Core
 		/// <param name="onSuccess">Callback, triggered when the order status is changed to `done`</param>
 		/// <param name="onError">Callback, triggered when an error occurs during the order tracking.</param>
 		/// <param name="sdkType">SDK type. Used for internal analytics.</param>
-		public static void AddOrderForTracking(XsollaSettings settings, int orderId, bool isUserInvolvedToPayment, Action<OrderStatus> onSuccess, Action<Error> onError, SdkType sdkType = SdkType.Store)
+		public static void AddOrderForTracking(XsollaSettings settings, long orderId, bool isUserInvolvedToPayment, Action<OrderStatus> onSuccess, Action<Error> onError, SdkType sdkType = SdkType.Store)
 		{
 			var tracker = CreateTracker(settings, orderId, sku: null, token: null, isUserInvolvedToPayment, onSuccess, onError, sdkType);
 			if (tracker != null)
@@ -45,7 +45,7 @@ namespace Xsolla.Core
 				StartTracker(tracker);
 		}
 
-		private static OrderTracker CreateTracker(XsollaSettings settings, int orderId, string sku, string token, bool isUserInvolvedToPayment, Action<OrderStatus> onSuccess, Action<Error> onError, SdkType sdkType)
+		private static OrderTracker CreateTracker(XsollaSettings settings, long orderId, string sku, string token, bool isUserInvolvedToPayment, Action<OrderStatus> onSuccess, Action<Error> onError, SdkType sdkType)
 		{
 			if ((orderId != -1 && Trackers.ContainsKey(orderId)) || (sku != null && TrackersBySku.ContainsKey(sku)) || (token != null && TrackersByToken.ContainsKey(token)))
 				return null;

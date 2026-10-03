@@ -20,27 +20,43 @@ namespace Xsolla.SDK.UnityPurchasing
 
         private const string Tag = "XsollaPurchasingStore";
 
-        private readonly IXsollaStoreClient _storeClient = XsollaStoreClientFactory.Create();
+        private readonly IXsollaStoreClient _storeClient;
         private readonly ISimpleFuture<XsollaClientConfiguration, string> _settingsFuture;
         private readonly Dictionary<string, ProductDefinition> _definitionBySku = new Dictionary<string, ProductDefinition>();
         private readonly Dictionary<string, XsollaStoreClientProduct> _productById = new Dictionary<string, XsollaStoreClientProduct>();
         private readonly Dictionary<string, Queue<ICart>> _pendingCartsBySku = new Dictionary<string, Queue<ICart>>();
-        private readonly Dictionary<string, int> _quantityByTransactionId = new Dictionary<string, int>();
+        private readonly Dictionary<(string transactionId, string sku), int> _quantityByPurchase =
+            new Dictionary<(string transactionId, string sku), int>();
+        private readonly Dictionary<(string transactionId, string sku), ConsumeState> _consumeStateByPurchase =
+            new Dictionary<(string transactionId, string sku), ConsumeState>();
         private readonly HashSet<string> _reportedTransactionIds = new HashSet<string>();
         private readonly List<XsollaStoreClientPurchasedProduct> _unreportedPurchases = new List<XsollaStoreClientPurchasedProduct>();
 
         private XsollaPurchasingStoreValidator _validator;
 
+        private enum ConsumeState
+        {
+            InFlight,
+            Done
+        }
+
         public ConnectionState ConnectionState { get; private set; } = ConnectionState.Disconnected;
 
         public XsollaPurchasingStore(XsollaClientConfiguration configuration)
+            : this(configuration, XsollaStoreClientFactory.Create())
         {
+        }
+
+        internal XsollaPurchasingStore(
+            XsollaClientConfiguration configuration,
+            IXsollaStoreClient storeClient)
+        {
+            _storeClient = storeClient;
             RunOnStartThread.Create();
 
             _settingsFuture = SimpleFuture.Create<XsollaClientConfiguration, string>(out var promise);
             XsollaLogger.SetLogLevel(configuration.logLevel);
 
-            if (configuration.delayedTask != null)
             if (configuration.delayedTask != null)
                 AwaitForConfiguration(configuration, promise);
             else
@@ -342,31 +358,53 @@ namespace Xsolla.SDK.UnityPurchasing
             var product = item.Product;
             var sku = product.definition.storeSpecificId;
             var transactionId = pendingOrder.Info.TransactionID;
+            var purchase = (transactionId, sku);
+            var isTracked = !string.IsNullOrEmpty(transactionId);
 
             if (GetProductType(product) != ProductType.Consumable)
             {
-                _quantityByTransactionId.Remove(transactionId);
+                if (isTracked)
+                    _quantityByPurchase.Remove(purchase);
                 ConfirmCallback?.OnConfirmOrderSucceeded(transactionId);
                 return;
             }
 
-            var quantity = _quantityByTransactionId.TryGetValue(transactionId, out var trackedQuantity)
+            if (isTracked && _consumeStateByPurchase.TryGetValue(purchase, out var consumeState))
+            {
+                XsollaLogger.Debug(Tag,
+                    $"FinishTransaction: ignoring a duplicate finish (state={consumeState}) sku={sku} transactionId={transactionId}");
+                return;
+            }
+
+            var quantity = isTracked && _quantityByPurchase.TryGetValue(purchase, out var trackedQuantity)
                 ? trackedQuantity
                 : 1;
 
             XsollaLogger.Debug(Tag, $"FinishTransaction: consuming sku={sku} quantity={quantity} transactionId={transactionId}");
+
+            if (isTracked)
+                _consumeStateByPurchase[purchase] = ConsumeState.InFlight;
+
             _storeClient.ConsumeProduct(
                 sku,
                 quantity,
                 transactionId,
                 onSuccess: () =>
                 {
-                    _quantityByTransactionId.Remove(transactionId);
+                    if (isTracked)
+                    {
+                        _consumeStateByPurchase[purchase] = ConsumeState.Done;
+                        _quantityByPurchase.Remove(purchase);
+                    }
+
                     XsollaLogger.Debug(Tag, $"FinishTransaction finished: sku={sku} quantity={quantity}");
                     ConfirmCallback?.OnConfirmOrderSucceeded(transactionId);
                 },
                 onError: error =>
                 {
+                    if (isTracked)
+                        _consumeStateByPurchase.Remove(purchase);
+
                     XsollaLogger.Error(Tag, $"FinishTransaction failed: sku={sku} quantity={quantity} transactionId={transactionId}: {error}");
                     ConfirmCallback?.OnConfirmOrderFailed(new FailedOrder(pendingOrder, PurchaseFailureReason.Unknown, error));
                 });
@@ -394,7 +432,7 @@ namespace Xsolla.SDK.UnityPurchasing
         private void TrackQuantity(XsollaStoreClientPurchasedProduct purchase)
         {
             if (!string.IsNullOrEmpty(purchase.transactionId))
-                _quantityByTransactionId[purchase.transactionId] = purchase.quantity > 0 ? purchase.quantity : 1;
+                _quantityByPurchase[(purchase.transactionId, purchase.sku)] = purchase.quantity > 0 ? purchase.quantity : 1;
         }
 
         private void TrackReportedTransaction(string transactionId)

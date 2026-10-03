@@ -2,6 +2,7 @@
 
 using System;
 using System.Runtime.InteropServices;
+using AOT;
 using JetBrains.Annotations;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -50,6 +51,43 @@ namespace Xsolla.SDK.Store
                     ? XsollaClientHelpers.FromJson<NativePaymentEvent>(json)
                     : null;
             }
+        }
+
+        #endregion
+
+
+        #region Native logging
+
+        [DllImport("__Internal")]
+        private static extern void _XsollaUnityBridgeSetLogCallback(XsollaUnityBridgeLogCallbackDelegate callback);
+
+        /// <summary>
+        /// <paramref name="level"/> is an <see cref="XsollaLogLevel"/> member name, as the native
+        /// side spells it.
+        /// </summary>
+        private delegate void XsollaUnityBridgeLogCallbackDelegate(string level, string message);
+
+        /// <summary>
+        /// Kept in a field so the delegate isn't collected while the native side holds the pointer.
+        /// </summary>
+        private static readonly XsollaUnityBridgeLogCallbackDelegate _nativeLogCallback = OnNativeLog;
+
+        private const string NativeTag = "iOS SDK";
+
+        /// <summary>
+        /// Puts a line the iOS SDK logged into the Unity log, where a developer without Xcode
+        /// attached can read it. Only warnings and errors are forwarded.
+        /// </summary>
+        [MonoPInvokeCallback(typeof(XsollaUnityBridgeLogCallbackDelegate))]
+        private static void OnNativeLog(string level, string message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return;
+
+            if (string.Equals(level, nameof(XsollaLogLevel.Error), StringComparison.OrdinalIgnoreCase))
+                XsollaLogger.Error(NativeTag, message);
+            else
+                XsollaLogger.Warning(NativeTag, message);
         }
 
         #endregion
@@ -109,6 +147,9 @@ namespace Xsolla.SDK.Store
                     });
                 }
             });
+
+            // Before anything else, so a warning or error from setup itself lands in the Unity log.
+            _XsollaUnityBridgeSetLogCallback(_nativeLogCallback);
 
             _XsollaUnityBridgeSetupAnalytics(Application.unityVersion); // will init Unity related analytics and setup its version
 
@@ -214,6 +255,15 @@ namespace Xsolla.SDK.Store
         public void PurchaseProduct(string sku, string developerPayload, XsollaStoreClientPurchaseArgs args, PurchaseProductResultFunc onSuccess, ErrorFunc onError)
         {
 	        var finalDeveloperPayload = developerPayload ?? args.developerPayload;
+
+            // TODO: forward `args.externalTransactionToken` to the native bridge. Both
+            // `_XsollaUnityBridgePurchase` and its Objective-C counterpart need the extra argument
+            // before the token can be applied here; until then it is reported as unsupported.
+            if (!string.IsNullOrEmpty(args.externalTransactionToken))
+            {
+                onError?.Invoke("External transaction token is not supported on iOS yet");
+                return;
+            }
 
             _XsollaUnityBridgePurchase(
                 sku, finalDeveloperPayload, args.externalId, args.paymentMethodId ?? -1, args.paymentToken, args.allowTokenOnlyFinishedStatusWithoutOrderId,

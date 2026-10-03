@@ -36,6 +36,82 @@ namespace Xsolla.Core
             return false;
         }
 
+        /// <summary>
+        /// Resolves a Pay Station payment-status response into the state of its order.
+        /// </summary>
+        /// <remarks>
+        /// The latest done invoice wins; without one, the latest invoice decides. Order and invoice IDs pass
+        /// through as the 64-bit values the response carries.
+        /// </remarks>
+        public static bool TryFromResponse(Response response, out OrderInfo orderInfo, out Error error)
+        {
+            var invoice = FindInvoice(response?.invoices_data);
+
+            orderInfo = null;
+            error = null;
+
+            if (invoice == null)
+            {
+                error = new Error(
+                    errorType: ErrorType.OrderInfoNoInvoices,
+                    errorMessage: "No invoices found in the response"
+                );
+            }
+            else if (!Enum.IsDefined(typeof(Response.Status), invoice.status))
+            {
+                error = new Error(
+                    errorType: ErrorType.OrderInfoInvalidStatus,
+                    errorMessage: "Invalid invoice status value: " + invoice.status
+                );
+            }
+            else if ((Response.Status)invoice.status == Response.Status.Processing)
+            {
+                orderInfo = new Pending();
+            }
+            else if ((Response.Status)invoice.status != Response.Status.Done)
+            {
+                orderInfo = new Canceled();
+            }
+            else if (invoice.invoice_id < 0)
+            {
+                error = new Error(
+                    errorType: ErrorType.OrderInfoDoneButInvalidInvoiceId,
+                    errorMessage: "Invalid invoice ID: " + invoice.invoice_id
+                );
+            }
+            else if (invoice.order_id < 0)
+            {
+                error = new Error(
+                    errorType: ErrorType.OrderInfoDoneButInvalidOrderId,
+                    errorMessage: "Invalid order ID: " + invoice.order_id,
+                    data: new Dictionary<string, string>
+                    {
+                        { "invoice_id", invoice.invoice_id.ToString() }
+                    }
+                );
+            }
+            else
+            {
+                orderInfo = new Done(invoice.order_id, invoice.invoice_id);
+            }
+
+            return error == null;
+        }
+
+        private static Response.InvoiceData FindInvoice(Response.InvoiceData[] invoices)
+        {
+            if (invoices == null || invoices.Length == 0)
+                return null;
+
+            for (var i = invoices.Length - 1; i >= 0; i--)
+            {
+                if ((Response.Status)invoices[i].status == Response.Status.Done)
+                    return invoices[i];
+            }
+
+            return invoices[invoices.Length - 1];
+        }
+
         [Serializable]
         internal sealed class Response
         {

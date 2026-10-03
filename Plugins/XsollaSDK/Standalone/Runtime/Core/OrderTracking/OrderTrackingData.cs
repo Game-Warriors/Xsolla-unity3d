@@ -4,7 +4,7 @@ namespace Xsolla.Core
 {
 	internal class OrderTrackingData
 	{
-		public int orderId { get; private set; }
+		public long orderId { get; private set; }
 		public readonly string sku;
 		public readonly string token;
 		public readonly Action<OrderStatus> successCallback;
@@ -13,7 +13,7 @@ namespace Xsolla.Core
 		public Error error { get; private set; } 
 		public readonly XsollaSettings settings;
 
-		public OrderTrackingData(XsollaSettings settings, int orderId, string sku, string token, Action<OrderStatus> successCallback, Action<Error> errorCallback, SdkType sdkType)
+		public OrderTrackingData(XsollaSettings settings, long orderId, string sku, string token, Action<OrderStatus> successCallback, Action<Error> errorCallback, SdkType sdkType)
 		{
 			this.orderId = orderId;
 			this.sku = sku;
@@ -25,7 +25,7 @@ namespace Xsolla.Core
 			this.settings = settings;
 		}
 		
-		public int OrderId
+		public long OrderId
 		{
 			get => orderId;
 			set => orderId = value;

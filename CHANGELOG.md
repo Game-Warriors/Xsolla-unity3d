@@ -1,3 +1,9 @@
+## [3.1.22] - 2026-10-03
+
+### Changed
+
+- update game warriors repo state base on main repo
+
 ## [3.1.21] - 2026-09-30
 
 ### Changed
